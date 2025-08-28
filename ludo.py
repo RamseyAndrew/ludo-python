@@ -1,6 +1,18 @@
 from rich.console import Console
 from rich.table import Table
 from rich.prompt import Prompt
+from datetime import datetime
+
+# Persistence
+try:
+    from ludo_cli.db import get_session_factory
+    from ludo_cli.models import Base, Player as PlayerModel, Game as GameModel, Move as MoveModel
+except Exception:
+    # Allow running without DB on systems without the package
+    get_session_factory = None
+    PlayerModel = None
+    GameModel = None
+    MoveModel = None
 import random
 
 console = Console()
@@ -87,40 +99,76 @@ def get_movable_tokens(player, dice):
     """Get list of tokens that can be moved with the current dice roll"""
     tokens = players[player]["tokens"]
     start_pos = players[player]["start_pos"]
+    finish_entry = players[player]["finish_entry"]
     movable = []
     
     for i, pos in enumerate(tokens):
-        if pos == 0 and dice == 6:  # Can enter board
+        # Token at home can only enter on a 6
+        if pos == 0:
+            if dice == 6:
+                movable.append(i)
+            continue
+
+        # Token in finish lane (51-57)
+        if 51 <= pos <= 57:
+            target = pos + dice
+            if target <= 57:  # must not overshoot finish
+                movable.append(i)
+            continue
+
+        # Token on main ring (1-52)
+        # Determine if this move reaches/enters finish lane for this player
+        steps_to_entry = (finish_entry - pos) % 52
+        if dice <= steps_to_entry:
+            # Stays on ring
             movable.append(i)
-        elif pos > 0:
-            new_pos = calculate_new_position(player, pos, dice)
-            if new_pos <= 57:  # Can move without overshooting finish
+        else:
+            remaining_into_lane = dice - steps_to_entry - 1
+            if 0 <= remaining_into_lane <= 6:
+                # Can enter lane and not overshoot
                 movable.append(i)
     
     return movable
 
 def calculate_new_position(player, current_pos, dice_roll):
-    """Calculate new position considering player-specific paths and finish lanes"""
+    """Calculate new absolute position respecting per-player finish entry and finish lane.
+
+    Representation:
+    - 0 = home
+    - 1..52 = ring squares (absolute around the board)
+    - 51..57 = player's finish lane steps (we map to player-specific lane when rendering)
+    """
     start_pos = players[player]["start_pos"]
     finish_entry = players[player]["finish_entry"]
-    
-    if current_pos == 0:  # Entering board
+
+    # Entering the board
+    if current_pos == 0:
         return start_pos
-    
-    # Check if token is in finish lane (positions 51-57)
-    if current_pos >= 51:
-        return min(current_pos + dice_roll, 57)
-    
-    # Calculate position on main circuit (1-50)
-    circuit_pos = (current_pos - start_pos) % 52
-    new_circuit_pos = circuit_pos + dice_roll
-    
-    # Check if entering finish lane
-    if new_circuit_pos >= 50:  # Ready to enter finish lane
-        return 51 + (new_circuit_pos - 50)
+
+    # Already in finish lane
+    if 51 <= current_pos <= 57:
+        # Must not overshoot final 57
+        target = current_pos + dice_roll
+        return target if target <= 57 else current_pos
+
+    # On the main ring. Compute steps to the finish entry square clockwise.
+    steps_to_entry = (finish_entry - current_pos) % 52
+    if dice_roll <= steps_to_entry:
+        # Move stays on ring
+        target = current_pos + dice_roll
+        return target if target <= 52 else target - 52
     else:
-        # Still on main circuit
-        return start_pos + new_circuit_pos if start_pos + new_circuit_pos <= 52 else (start_pos + new_circuit_pos) - 52
+        # Enter the finish lane if possible
+        remaining_into_lane = dice_roll - steps_to_entry - 1
+        # If remaining exceeds the lane length (6), movement is invalid; stay
+        if remaining_into_lane < 0:
+            # Should not happen, but guard anyway
+            target = current_pos + dice_roll
+            return target if target <= 52 else target - 52
+        if remaining_into_lane <= 6:
+            return 51 + remaining_into_lane
+        # Cannot move; would overshoot the lane
+        return current_pos
 
 def capture_token(position, current_player):
     """Check if any opponent tokens are captured at this position"""
@@ -142,15 +190,15 @@ def capture_token(position, current_player):
     return captured
 
 def move_token(player, dice):
-    """Handle token movement with player choice"""
+    """Handle token movement with player choice. Returns tuple (moved, token_idx, old_pos, new_pos)."""
     if dice == 0:  # Three consecutive 6s penalty
-        return False
+        return False, None, None, None
         
     movable_tokens = get_movable_tokens(player, dice)
     
     if not movable_tokens:
         console.print(f"[bold red]No valid moves for {player}![/bold red]")
-        return False
+        return False, None, None, None
     
     # Show current token positions
     show_player_tokens(player)
@@ -190,7 +238,7 @@ def move_token(player, dice):
         for captured_player, captured_token in captured:
             console.print(f"[bold red]💥 {captured_player}'s token {captured_token} was captured and sent home![/bold red]")
     
-    return True
+    return True, token_idx, old_pos, new_pos
 
 def show_player_tokens(player):
     """Show current positions of player's tokens"""
@@ -273,11 +321,9 @@ def print_board():
             board[6][c] = "[white]○[/white] "
             board[8][c] = "[white]○[/white] "
     
-    # Mark safe spots with stars
-    safe_spots = [(6, 2), (2, 6), (6, 12), (8, 12), (12, 8), (8, 2)]
-    for (r, c) in safe_spots:
-        if 0 <= r < 15 and 0 <= c < 15:
-            board[r][c] = "[bold white]★[/bold white] "
+    # Mark safe spots with stars based on ring indices in safe_positions
+    # Map ring indices to board coordinates and decorate them
+    # (we'll fill token_positions later; temporarily collect here and decorate after mapping)
     
     # Create finish lanes leading to center
     # Red finish lane (going right toward center)
@@ -301,7 +347,7 @@ def print_board():
     
     # Mark starting positions for each player
     start_markers = [(6, 1), (1, 8), (8, 13), (13, 6)]  # Red, Blue, Green, Yellow
-    start_colors = ["red", "blue", "yellow", "g"]
+    start_colors = ["red", "blue", "green", "yellow"]
     
     for i, (r, c) in enumerate(start_markers):
         board[r][c] = f"[bold {start_colors[i]}]◉[/bold {start_colors[i]}] "
@@ -339,22 +385,37 @@ def print_board():
     for i, coord in enumerate(circuit_coords[:52]):
         token_positions[i + 1] = coord
     
-    # Finish lane positions (51-57)
-    finish_coords = [
-        (7, 1), (7, 2), (7, 3), (7, 4), (7, 5), (7, 6), (7, 7)  # Toward center
-    ]
+    # Finish lane positions (51-57) are player-specific; build per-player maps
+    finish_lane_coords = {
+        "Player 1": [(7, 1), (7, 2), (7, 3), (7, 4), (7, 5), (7, 6), (7, 7)],            # Red → right to center
+        "Player 2": [(1, 7), (2, 7), (3, 7), (4, 7), (5, 7), (6, 7), (7, 7)],            # Blue → down to center
+        "Player 3": [(7, 13), (7, 12), (7, 11), (7, 10), (7, 9), (7, 8), (7, 7)],        # Green → left to center
+        "Player 4": [(13, 7), (12, 7), (11, 7), (10, 7), (9, 7), (8, 7), (7, 7)],        # Yellow → up to center
+    }
     
-    for i, coord in enumerate(finish_coords):
-        token_positions[51 + i] = coord
-    
+    # Decorate safe ring squares
+    for idx in safe_positions:
+        if idx in token_positions:
+            r, c = token_positions[idx]
+            if 0 <= r < 15 and 0 <= c < 15:
+                board[r][c] = "[bold white]★[/bold white] "
+
     # Place player tokens on board
     for player, info in players.items():
         color = info["color"].lower()
         letter = player_letters[player]
         
         for token_pos in info["tokens"]:
-            if token_pos > 0 and token_pos in token_positions:
-                row, col = token_positions[token_pos]
+            if token_pos > 0 and 1 <= token_pos <= 52:
+                if token_pos in token_positions:
+                    row, col = token_positions[token_pos]
+                    if 0 <= row < 15 and 0 <= col < 15:
+                        board[row][col] = f"[bold {color}]{letter}[/bold {color}] "
+            elif 51 <= token_pos <= 57:
+                # Player-specific finish lane
+                lane_idx = token_pos - 51
+                coords = finish_lane_coords[player]
+                row, col = coords[lane_idx]
                 if 0 <= row < 15 and 0 <= col < 15:
                     board[row][col] = f"[bold {color}]{letter}[/bold {color}] "
     
@@ -410,6 +471,27 @@ def main():
     welcome_screen()
     input("\nPress [Enter] to start the game...")
     
+    # Setup persistence (optional)
+    SessionFactory = get_session_factory() if get_session_factory else None
+    session = SessionFactory() if SessionFactory else None
+    game_id = None
+    turn_counter = 0
+
+    if session and GameModel and PlayerModel:
+        # Ensure players exist
+        existing_players = {p.name: p for p in session.query(PlayerModel).all()}
+        for name, info in players.items():
+            if name not in existing_players:
+                p = PlayerModel(name=name, color=info["color"])
+                session.add(p)
+        session.commit()
+
+        # Create game record
+        game = GameModel(started_at=datetime.utcnow())
+        session.add(game)
+        session.commit()
+        game_id = game.id
+
     player_list = list(players.keys())
     current_turn = 0
     game_over = False
@@ -424,8 +506,25 @@ def main():
         dice = roll_dice(player)
         
         # Try to move a token
-        move_made = move_token(player, dice)
+        moved, token_idx, old_pos, new_pos = move_token(player, dice)
         
+        # Persist move if applicable
+        if session and game_id and MoveModel and PlayerModel and moved and token_idx is not None:
+            db_player = session.query(PlayerModel).filter_by(name=player).first()
+            mv = MoveModel(
+                game_id=game_id,
+                player_id=db_player.id if db_player else None,
+                turn_index=turn_counter,
+                dice=dice,
+                token_index=token_idx + 1,
+                old_pos=old_pos,
+                new_pos=new_pos,
+            )
+            session.add(mv)
+            session.commit()
+
+        turn_counter += 1
+
         # Print updated board and status
         print_board()
         print_game_status()
@@ -438,7 +537,7 @@ def main():
             break
         
         # Handle turn progression
-        if dice == 6 and move_made and dice != 0:
+        if dice == 6 and moved and dice != 0:
             console.print("🎲 [bold yellow]You rolled a 6! Take another turn![/bold yellow]")
             # Don't change current_turn, same player goes again
         else:
@@ -451,6 +550,14 @@ def main():
             if choice.lower() in ['n', 'no', 'quit', 'exit']:
                 console.print("Thanks for playing! 👋")
                 break
+
+    # Close game
+    if session and game_id and GameModel:
+        game = session.query(GameModel).get(game_id)
+        if game:
+            game.ended_at = datetime.utcnow()
+            session.commit()
+        session.close()
 
 if __name__ == "__main__":
     main()      
