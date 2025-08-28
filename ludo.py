@@ -50,6 +50,15 @@ def welcome_screen():
     console.print("• Three consecutive 6s sends your newest token back home")
     console.print("• Must roll exact number to finish (can't overshoot)")
 
+
+
+
+
+
+
+
+
+
 def roll_dice(player):
     dice = random.randint(1, 6)
     console.print(f"[bold yellow]{player}[/bold yellow] rolled a 🎲 [bold cyan]{dice}[/bold cyan]")
@@ -215,6 +224,16 @@ def check_winner(player):
     """Check if player has won (all tokens at position 57)"""
     return all(token == 57 for token in players[player]["tokens"])
 
+
+
+
+
+
+
+
+
+
+
 def print_board():
     """Print the Ludo board with colorful layout"""
     # Create 15x15 board
@@ -376,6 +395,17 @@ def print_game_status():
     
     console.print(table)
 
+
+
+
+
+
+
+
+
+
+
+
 def main():
     welcome_screen()
     input("\nPress [Enter] to start the game...")
@@ -424,3 +454,5 @@ def main():
 
 if __name__ == "__main__":
     main()      
+
+
