@@ -17,7 +17,7 @@ import random
 
 console = Console()
 
-# Setup players and tokens with player-specific starting positions
+#  eeh apa we setup players and tokens with player-specific starting positions juu last time movement ilitushinda
 players = {
     "Player 1": {"color": "Red", "tokens": [0, 0, 0, 0], "start_pos": 1, "finish_entry": 50},
     "Player 2": {"color": "Blue", "tokens": [0, 0, 0, 0], "start_pos": 14, "finish_entry": 11},
@@ -25,7 +25,7 @@ players = {
     "Player 4": {"color": "Yellow", "tokens": [0, 0, 0, 0], "start_pos": 40, "finish_entry": 37}
 }
 
-# Map player names to letters for the board
+# Mapping player names to letters for the board
 player_letters = {
     "Player 1": "R",
     "Player 2": "B", 
@@ -33,7 +33,7 @@ player_letters = {
     "Player 4": "Y"
 }
 
-# Safe positions where tokens can't be captured (traditional Ludo safe spots)
+# Safe positions where tokens can't be captured (ka the origi Ludo safe spots)
 safe_positions = [1, 9, 14, 22, 27, 35, 40, 48]
 
 # Track consecutive 6s for each player
