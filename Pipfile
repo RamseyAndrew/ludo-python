@@ -7,6 +7,7 @@ verify_ssl = true
 rich = "*"
 sqlalchemy = ">=2.0,<3.0"
 alembic = "*"
+psycopg = {extras = ["pool", "binary"], version = "*"}
 
 [dev-packages]
 
