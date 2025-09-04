@@ -6,7 +6,7 @@ def main():
     SessionFactory = get_session_factory() if get_session_factory else None
     session = SessionFactory() if SessionFactory else None
     game_id = None
-    turn_counter = 0
+    
 
     if session and GameModel and PlayerModel:
         # Ensure players exist
